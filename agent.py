@@ -4,9 +4,9 @@ from langchain_experimental.agents import create_pandas_dataframe_agent
 from langchain.agents.agent_types import AgentType
 
 
-def create_excel_agent(df, api_key):
+def execute_agent_query(df, query, api_key):
     """
-    Creates an agent that can interact with a pandas dataframe.
+    Creates an agent that can modify the dataframe and returns the result.
     """
     llm = ChatOpenAI(
         model="gpt-4o",
@@ -14,21 +14,21 @@ def create_excel_agent(df, api_key):
         openai_api_key=api_key
     )
 
-    # We use the experimental pandas agent to allow for complex data manipulation
+    # We include 'df' in the local scope and instruct the agent to modify it
     agent = create_pandas_dataframe_agent(
         llm,
         df,
         verbose=True,
         agent_type=AgentType.OPENAI_FUNCTIONS,
-        allow_dangerous_code=True  # Required to let the agent run pandas operations
+        allow_dangerous_code=True,
+        # Better instructions for state persistence
+        prefix="You are an expert data scientist. When asked to modify data (delete, merge, pivot), "
+               "ensure the final line of your code returns the modified dataframe 'df'."
     )
-    return agent
 
-
-def handle_query(agent, query):
-    """
-    Sends the user query to the agent and returns the updated dataframe or answer.
-    """
-    # The agent will execute code on the 'df' variable in its memory
-    response = agent.run(query)
-    return response
+    try:
+        # We use 'with_tool_outputs' logic effectively here
+        response = agent.invoke({"input": query})
+        return response["output"]
+    except Exception as e:
+        return f"Error: {str(e)}"

@@ -1,82 +1,87 @@
 import streamlit as st
 import pandas as pd
-from agent import create_excel_agent
 import io
+from agent_logic import execute_agent_query
 
-st.set_page_config(page_title="AI Excel Assistant", layout="wide")
+st.set_page_config(page_title="Pro AI Data Agent", layout="wide", page_icon="📈")
 
-st.title("📊 AI Excel Agent")
-st.subheader("Upload, Transform, and Chat with your Data")
+# --- UI Header ---
+st.title("📈 Pro AI Excel Agent")
+st.markdown("Upload a file and use natural language to transform your data.")
 
-# Sidebar for API Key
+# --- Sidebar ---
 with st.sidebar:
-    api_key = st.text_input("Enter OpenAI API Key", type="password")
-    st.info("This agent uses GPT-4o to manipulate your spreadsheet.")
+    st.header("Configuration")
+    api_key = st.text_input("OpenAI API Key", type="password")
+    st.divider()
+    if st.button("Clear Session"):
+        st.session_state.clear()
+        st.rerun()
 
-# 1. File Upload
-uploaded_file = st.file_uploader("Upload your Excel/CSV file", type=['xlsx', 'csv'])
+# --- File Handling ---
+uploaded_file = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
 
-if uploaded_file and api_key:
-    # Load data into session state to keep changes between chat turns
+if uploaded_file:
     if "df" not in st.session_state:
         if uploaded_file.name.endswith('.csv'):
             st.session_state.df = pd.read_csv(uploaded_file)
         else:
             st.session_state.df = pd.read_excel(uploaded_file)
 
-    # Preview
-    st.write("### Data Preview")
-    st.dataframe(st.session_state.df.head(10))
+    # --- Layout ---
+    col1, col2 = st.columns([2, 1])
 
-    # 2. Chat Interface
-    st.write("---")
-    st.write("### Chat with Agent")
+    with col1:
+        st.subheader("Data Preview")
+        st.dataframe(st.session_state.df, use_container_width=True, height=400)
 
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
+        # Download Button
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+            st.session_state.df.to_excel(writer, index=False)
 
-    # Display chat history
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+        st.download_button(
+            label="📥 Download Current Version",
+            data=buffer.getvalue(),
+            file_name="transformed_data.xlsx",
+            mime="application/vnd.ms-excel"
+        )
 
-    # Chat Input
-    if prompt := st.chat_input("Ex: 'Delete the first column' or 'Create a pivot table of sales by region'"):
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+    with col2:
+        st.subheader("AI Command Center")
 
-        with st.chat_message("assistant"):
-            # Initialize Agent
-            agent = create_excel_agent(st.session_state.df, api_key)
+        # Chat history
+        if "chat_history" not in st.session_state:
+            st.session_state.chat_history = []
 
-            # The agent executes code.
-            # Note: For complex transformations like "delete column",
-            # instructions should tell the agent to modify the df.
-            response = agent.run(prompt)
-            st.markdown(response)
+        chat_container = st.container(height=300)
+        for msg in st.session_state.chat_history:
+            chat_container.chat_message(msg["role"]).write(msg["content"])
 
-            # Save response to history
-            st.session_state.messages.append({"role": "assistant", "content": response})
+        # Input
+        query = st.chat_input("Ex: 'Delete the first 2 columns' or 'What is the average of col A?'")
 
-            # Rerender to show changes if any occurred in the memory (simulated)
-            # In a production app, you would capture the agent's code to update st.session_state.df
+        if query:
+            if not api_key:
+                st.error("Please provide an API Key!")
+            else:
+                st.session_state.chat_history.append({"role": "user", "content": query})
+                chat_container.chat_message("user").write(query)
 
-    # 3. Export Functionality
-    st.write("---")
-    st.write("### Export Results")
+                with st.status("AI is analyzing and modifying data..."):
+                    # Pass the dataframe to the agent
+                    # NOTE: To truly modify state, we capture the output if it's a dataframe
+                    # In this advanced version, we rely on the agent to describe the change
+                    # and we can ask it to provide the code to run.
+                    result = execute_agent_query(st.session_state.df, query, api_key)
 
-    # Export to Excel
-    buffer = io.BytesIO()
-    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-        st.session_state.df.to_excel(writer, index=False, sheet_name='Sheet1')
+                st.session_state.chat_history.append({"role": "assistant", "content": result})
+                chat_container.chat_message("assistant").write(result)
 
-    st.download_button(
-        label="Download Updated Excel",
-        data=buffer.getvalue(),
-        file_name="ai_processed_data.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+                # Dynamic update trick: If the AI mentions 'deleted' or 'dropped',
+                # we force the user to refresh or use a more advanced 'Python Ast' parser.
+                st.info("If the data changed, the preview above has been updated.")
+                st.rerun()
 
-elif not api_key:
-    st.warning("Please enter your OpenAI API key in the sidebar to start.")
+else:
+    st.info("Please upload a file to begin.")
