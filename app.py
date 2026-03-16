@@ -3,117 +3,109 @@ import pandas as pd
 import io
 import os
 
-# Updated Imports for 2026 LangChain
-from langchain_openai import ChatOpenAI
+# Local AI Imports
+from langchain_ollama import ChatOllama
 from langchain_experimental.agents import create_pandas_dataframe_agent
 
-# UI Config
-st.set_page_config(page_title="AI Data Architect Pro", layout="wide", page_icon="🚀")
+# --- UI Setup ---
+st.set_page_config(page_title="Local Data AI", layout="wide", page_icon="🤖")
+
+st.title("🤖 Local AI Data Agent")
+st.markdown("""
+    **Privacy First:** This app runs 100% on your local machine using **Ollama**. 
+    No data is sent to OpenAI or the cloud.
+""")
+
+# --- Model Configuration ---
+# You can change 'llama3' to whatever model you 'pulled' in Ollama
+LOCAL_MODEL = "llama3"
 
 
-# --- Agent Logic (Embedded directly to prevent ModuleNotFoundError) ---
-def run_ai_transformation(df, user_query, api_key):
-    try:
-        llm = ChatOpenAI(
-            model="gpt-4o",
-            temperature=0,
-            openai_api_key=api_key
-        )
+def get_agent(df):
+    llm = ChatOllama(
+        model=LOCAL_MODEL,
+        temperature=0,
+        base_url="http://localhost:11434"  # Default Ollama Port
+    )
 
-        # We use agent_type="openai-tools" which is the 2026 standard
-        agent = create_pandas_dataframe_agent(
-            llm,
-            df,
-            verbose=True,
-            agent_type="openai-tools",  # More stable than legacy agent_types enum
-            allow_dangerous_code=True,
-            prefix="""You are a world-class Data Engineer. 
-            When asked to 'delete', 'drop', 'rename', or 'modify' columns/rows:
-            1. Perform the operation on the dataframe 'df'.
-            2. Explain exactly what you did.
-            3. Always mention the resulting number of columns or rows."""
-        )
-
-        response = agent.invoke({"input": user_query})
-        return response["output"]
-    except Exception as e:
-        return f"⚠️ Analysis Error: {str(e)}"
+    return create_pandas_dataframe_agent(
+        llm,
+        df,
+        verbose=True,
+        allow_dangerous_code=True,  # Required for the AI to run Python code on your data
+        handle_parsing_errors=True
+    )
 
 
-# --- Main Streamlit App ---
-st.title("🚀 AI Data Architect Pro")
-st.markdown("##### Transform Excel & CSV with natural language.")
-
-# Sidebar API Management
-with st.sidebar:
-    st.header("🔑 Authentication")
-    api_key = st.text_input("OpenAI API Key", type="password", placeholder="sk-...")
-    if not api_key:
-        st.warning("Enter your API key to enable the AI.")
-
-    st.divider()
-    st.header("🧹 Session Controls")
-    if st.button("Reset Application"):
-        st.session_state.clear()
-        st.rerun()
-
-# File Upload
-uploaded_file = st.file_uploader("Upload your data file", type=["csv", "xlsx"])
+# --- File Upload ---
+uploaded_file = st.file_uploader("Upload your Excel or CSV file", type=["csv", "xlsx"])
 
 if uploaded_file:
-    # Initialize Data
+    # Load data into session state
     if "df" not in st.session_state:
         if uploaded_file.name.endswith('.csv'):
             st.session_state.df = pd.read_csv(uploaded_file)
         else:
             st.session_state.df = pd.read_excel(uploaded_file)
 
-    # UI Columns
-    preview_col, chat_col = st.columns([1.5, 1])
+    # Layout: Preview and Chat
+    view_col, chat_col = st.columns([1.5, 1])
 
-    with preview_col:
-        st.subheader("📊 Live Data Preview")
-        st.dataframe(st.session_state.df, use_container_width=True, height=450)
+    with view_col:
+        st.subheader("📊 Data Preview")
+        st.dataframe(st.session_state.df, use_container_width=True, height=400)
 
-        # Download Handler
+        # Download Logic
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             st.session_state.df.to_excel(writer, index=False)
 
         st.download_button(
-            label="💾 Download Current File",
+            label="📥 Download Updated File",
             data=buffer.getvalue(),
-            file_name="transformed_data.xlsx",
-            mime="application/vnd.ms-excel"
+            file_name="local_ai_processed.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
     with chat_col:
-        st.subheader("💬 AI Agent")
+        st.subheader("💬 Local Chat")
 
         if "messages" not in st.session_state:
             st.session_state.messages = []
 
-        # Chat display
-        container = st.container(height=350)
+        # Display history
         for m in st.session_state.messages:
-            container.chat_message(m["role"]).write(m["content"])
+            with st.chat_message(m["role"]):
+                st.write(m["content"])
 
-        # Query Input
-        if prompt := st.chat_input("Ex: 'Delete the Unnamed columns'"):
-            if not api_key:
-                st.error("Missing API Key!")
-            else:
-                st.session_state.messages.append({"role": "user", "content": prompt})
-                container.chat_message("user").write(prompt)
+        # User Input
+        if prompt := st.chat_input("Ex: 'Delete the first column' or 'What is the sum of column X?'"):
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            with st.chat_message("user"):
+                st.write(prompt)
 
-                with st.status("Engineer is working on your data..."):
-                    result = run_ai_transformation(st.session_state.df, prompt, api_key)
+            with st.chat_message("assistant"):
+                with st.spinner("AI is analyzing local data..."):
+                    try:
+                        agent = get_agent(st.session_state.df)
+                        # We use .invoke for the newer LangChain standard
+                        response = agent.invoke({"input": prompt})
+                        answer = response["output"]
 
-                st.session_state.messages.append({"role": "assistant", "content": result})
-                container.chat_message("assistant").write(result)
+                        st.write(answer)
+                        st.session_state.messages.append({"role": "assistant", "content": answer})
 
-                # To ensure persistent changes, if the agent says it modified something,
-                # we force a rerun to refresh the 'st.dataframe' view.
-                st.rerun()
+                        # In many cases, the agent modifies the 'df' object in its own context.
+                        # To reflect changes in the UI, we may need to prompt the agent
+                        # to specifically confirm it updated the variable.
+                        if "deleted" in answer.lower() or "dropped" in answer.lower() or "modified" in answer.lower():
+                            st.info("Data modification detected. Refreshing view...")
+                            st.rerun()
+
+                    except Exception as e:
+                        st.error(f"Error: {str(e)}")
+                        st.info("Check if Ollama is running (`ollama serve`) in your terminal.")
+
 else:
-    st.info("Waiting for a CSV or Excel file to be uploaded.")
+    st.info("Please upload a file to start.")
+    st.image("https://ollama.com/public/ollama.png", width=100)
