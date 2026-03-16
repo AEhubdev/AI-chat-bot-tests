@@ -1,87 +1,119 @@
 import streamlit as st
 import pandas as pd
 import io
-from agent_logic import execute_agent_query
+import os
 
-st.set_page_config(page_title="Pro AI Data Agent", layout="wide", page_icon="📈")
+# Updated Imports for 2026 LangChain
+from langchain_openai import ChatOpenAI
+from langchain_experimental.agents import create_pandas_dataframe_agent
 
-# --- UI Header ---
-st.title("📈 Pro AI Excel Agent")
-st.markdown("Upload a file and use natural language to transform your data.")
+# UI Config
+st.set_page_config(page_title="AI Data Architect Pro", layout="wide", page_icon="🚀")
 
-# --- Sidebar ---
+
+# --- Agent Logic (Embedded directly to prevent ModuleNotFoundError) ---
+def run_ai_transformation(df, user_query, api_key):
+    try:
+        llm = ChatOpenAI(
+            model="gpt-4o",
+            temperature=0,
+            openai_api_key=api_key
+        )
+
+        # We use agent_type="openai-tools" which is the 2026 standard
+        agent = create_pandas_dataframe_agent(
+            llm,
+            df,
+            verbose=True,
+            agent_type="openai-tools",  # More stable than legacy agent_types enum
+            allow_dangerous_code=True,
+            prefix="""You are a world-class Data Engineer. 
+            When asked to 'delete', 'drop', 'rename', or 'modify' columns/rows:
+            1. Perform the operation on the dataframe 'df'.
+            2. Explain exactly what you did.
+            3. Always mention the resulting number of columns or rows."""
+        )
+
+        response = agent.invoke({"input": user_query})
+        return response["output"]
+    except Exception as e:
+        return f"⚠️ Analysis Error: {str(e)}"
+
+
+# --- Main Streamlit App ---
+st.title("🚀 AI Data Architect Pro")
+st.markdown("##### Transform Excel & CSV with natural language.")
+
+# Sidebar API Management
 with st.sidebar:
-    st.header("Configuration")
-    api_key = st.text_input("OpenAI API Key", type="password")
+    st.header("🔑 Authentication")
+    api_key = st.text_input("OpenAI API Key", type="password", placeholder="sk-...")
+    if not api_key:
+        st.warning("Enter your API key to enable the AI.")
+
     st.divider()
-    if st.button("Clear Session"):
+    st.header("🧹 Session Controls")
+    if st.button("Reset Application"):
         st.session_state.clear()
         st.rerun()
 
-# --- File Handling ---
-uploaded_file = st.file_uploader("Upload CSV or Excel", type=["csv", "xlsx"])
+# File Upload
+uploaded_file = st.file_uploader("Upload your data file", type=["csv", "xlsx"])
 
 if uploaded_file:
+    # Initialize Data
     if "df" not in st.session_state:
         if uploaded_file.name.endswith('.csv'):
             st.session_state.df = pd.read_csv(uploaded_file)
         else:
             st.session_state.df = pd.read_excel(uploaded_file)
 
-    # --- Layout ---
-    col1, col2 = st.columns([2, 1])
+    # UI Columns
+    preview_col, chat_col = st.columns([1.5, 1])
 
-    with col1:
-        st.subheader("Data Preview")
-        st.dataframe(st.session_state.df, use_container_width=True, height=400)
+    with preview_col:
+        st.subheader("📊 Live Data Preview")
+        st.dataframe(st.session_state.df, use_container_width=True, height=450)
 
-        # Download Button
+        # Download Handler
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             st.session_state.df.to_excel(writer, index=False)
 
         st.download_button(
-            label="📥 Download Current Version",
+            label="💾 Download Current File",
             data=buffer.getvalue(),
             file_name="transformed_data.xlsx",
             mime="application/vnd.ms-excel"
         )
 
-    with col2:
-        st.subheader("AI Command Center")
+    with chat_col:
+        st.subheader("💬 AI Agent")
 
-        # Chat history
-        if "chat_history" not in st.session_state:
-            st.session_state.chat_history = []
+        if "messages" not in st.session_state:
+            st.session_state.messages = []
 
-        chat_container = st.container(height=300)
-        for msg in st.session_state.chat_history:
-            chat_container.chat_message(msg["role"]).write(msg["content"])
+        # Chat display
+        container = st.container(height=350)
+        for m in st.session_state.messages:
+            container.chat_message(m["role"]).write(m["content"])
 
-        # Input
-        query = st.chat_input("Ex: 'Delete the first 2 columns' or 'What is the average of col A?'")
-
-        if query:
+        # Query Input
+        if prompt := st.chat_input("Ex: 'Delete the Unnamed columns'"):
             if not api_key:
-                st.error("Please provide an API Key!")
+                st.error("Missing API Key!")
             else:
-                st.session_state.chat_history.append({"role": "user", "content": query})
-                chat_container.chat_message("user").write(query)
+                st.session_state.messages.append({"role": "user", "content": prompt})
+                container.chat_message("user").write(prompt)
 
-                with st.status("AI is analyzing and modifying data..."):
-                    # Pass the dataframe to the agent
-                    # NOTE: To truly modify state, we capture the output if it's a dataframe
-                    # In this advanced version, we rely on the agent to describe the change
-                    # and we can ask it to provide the code to run.
-                    result = execute_agent_query(st.session_state.df, query, api_key)
+                with st.status("Engineer is working on your data..."):
+                    result = run_ai_transformation(st.session_state.df, prompt, api_key)
 
-                st.session_state.chat_history.append({"role": "assistant", "content": result})
-                chat_container.chat_message("assistant").write(result)
+                st.session_state.messages.append({"role": "assistant", "content": result})
+                container.chat_message("assistant").write(result)
 
-                # Dynamic update trick: If the AI mentions 'deleted' or 'dropped',
-                # we force the user to refresh or use a more advanced 'Python Ast' parser.
-                st.info("If the data changed, the preview above has been updated.")
+                # To ensure persistent changes, if the agent says it modified something,
+                # we force a rerun to refresh the 'st.dataframe' view.
                 st.rerun()
-
 else:
-    st.info("Please upload a file to begin.")
+    st.info("Waiting for a CSV or Excel file to be uploaded.")

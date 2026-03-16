@@ -3,5 +3,6 @@ pandas
 openpyxl
 langchain
 langchain-openai
+langchain-community
 langchain-experimental
 tabulate
